@@ -21,3 +21,15 @@ py -m pip freeze > requirements.txt
 ```bash
 py -m pip install -r requirements.txt
 ```
+
+## Create virtual environment
+
+```bash
+py -m venv .venv
+```
+
+## Activate virtual environment
+
+```bash
+.venv\Scripts\activate
+```

@@ -1,0 +1,10 @@
+# Python
+*.pyc
+__pycache__/
+
+# Virtual environment
+example_lib/.venv/
+.env/
+
+# Dependency files
+*.lock
