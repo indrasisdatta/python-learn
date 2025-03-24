@@ -15,3 +15,8 @@ dep_ids = ['001', '002', '003']
 emp_names = ["John", "Mary", "Rob"]
 pair = [[dep_id, emp_name] for dep_id in dep_ids for emp_name in emp_names]
 print(pair)
+
+# Feedback - find the no. of positive feedbacks 
+feedbacks = ["Great service", "Excellent ambience", "Not happy", "Average", "Nice"]
+positive_feedback_count = sum(1 for feed in feedbacks if "great" in feed.lower() or "excellent" in feed.lower() or "nice" in feed.lower())
+print(f"Total positive feedbacks: {positive_feedback_count}")
