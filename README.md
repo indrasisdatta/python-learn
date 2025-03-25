@@ -34,8 +34,20 @@ py -m venv .venv
 .venv\Scripts\activate
 ```
 
-## Conda command
+## Conda commands
 
 ```
 conda create -p venv1 python=3.10 -y
+```
+
+```
+conda env list
+```
+
+```
+conda activate D:\Code\Python\python-learn\conda_example\venv1
+```
+
+```
+python -m pip install numpy
 ```
