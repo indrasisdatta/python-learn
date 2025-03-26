@@ -51,3 +51,9 @@ conda activate D:\Code\Python\python-learn\conda_example\venv1
 ```
 python -m pip install numpy
 ```
+
+```
+py (the Python launcher) ignores your active virtual environment and instead follows its own logic to select a Python version.
+
+python modules.py uses the Python interpreter from the active virtual environment (which is why it works).
+```
