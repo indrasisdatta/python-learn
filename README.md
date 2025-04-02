@@ -57,3 +57,7 @@ py (the Python launcher) ignores your active virtual environment and instead fol
 
 python modules.py uses the Python interpreter from the active virtual environment (which is why it works).
 ```
+
+```
+streamlit run app.py
+```
