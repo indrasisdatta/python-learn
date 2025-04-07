@@ -61,3 +61,14 @@ python modules.py uses the Python interpreter from the active virtual environmen
 ```
 streamlit run app.py
 ```
+
+```
+jupyter notebook --notebook-dir=D:
+```
+
+```
+conda activate venv1 \
+conda install ipykernel \
+python -m ipykernel install --user --name venv1 --display-name="Jupyter venv"
+
+```
