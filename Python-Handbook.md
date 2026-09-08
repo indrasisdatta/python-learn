@@ -896,92 +896,799 @@ def transaction(database) -> Iterator[object]:
 
 ## 8. Type hints and interface design
 
-### What type hints do
+# Python Type Hints & Interface Design — Detailed Notes (Topics 3–15)
 
-Type hints improve readability, editor support, and static analysis. Python does not enforce ordinary annotations at runtime.
+> Organized by priority (🔴 Must-know → 🟢 Nice-to-have). Each topic includes a practical example — many tied to Gen AI / LLM workloads since that's your target domain.
 
-```python
-def normalize_scores(scores: list[float]) -> dict[str, float]:
-    if not scores:
-        return {"min": 0.0, "max": 0.0}
-    return {"min": min(scores), "max": max(scores)}
-```
+---
 
-Calling this function with a string is still possible at runtime. A static checker such as mypy or pyright is what reports the mismatch before execution.
+## 🔴 3. `TypedDict` — Typed Dictionaries
 
-### Common annotations
+**What:** A way to give a dictionary a fixed set of keys, each with its own type. Behaves like a `dict` at runtime but gives IDE/type-checker support.
 
-```python
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from typing import Literal, TypedDict
+**Why it matters for interviews:** Often contrasted with `dataclass` and `NamedTuple`. Interviewers ask: "when would you use TypedDict over a dataclass?" Answer: when you're working with JSON-like data (APIs, configs, LLM outputs) and want lightweight, dict-compatible structures.
 
-
-class UserRecord(TypedDict):
-    id: int
-    name: str
-
-
-def load_users(
-    ids: Sequence[int],
-    fields: Iterable[str],
-    mode: Literal["strict", "lenient"] = "strict",
-) -> Iterator[UserRecord]:
-    ...
-```
-
-Prefer abstract input types when the function does not require a concrete implementation. For example, accept `Sequence[str]` when both lists and tuples are valid.
-
-### `None` and unions
+**Gen AI angle:** Perfect for modelling structured LLM responses, tool-call arguments, and prompt templates.
 
 ```python
-def find_user(user_id: int) -> User | None:
-    ...
+from typing import TypedDict, NotRequired
+
+# Simple TypedDict — all keys required
+class LLMConfig(TypedDict):
+    model: str
+    temperature: float
+    max_tokens: int
+
+# With optional keys (Python 3.11+) or NotRequired (3.10+)
+class LLMResponse(TypedDict):
+    content: str
+    tool_calls: list[str]
+    refusal: NotRequired[str]   # may be absent
+
+# Usage — static type checker validates keys
+config: LLMConfig = {"model": "gpt-4o", "temperature": 0.7, "max_tokens": 1024}
+# config["timeout"] = 30  # ← Type error! 'timeout' is not a key
+
+# Parsed JSON from an API becomes a LLMResponse
+response: LLMResponse = {"content": "Hello", "tool_calls": []}
 ```
 
-`User | None` means the result can be a `User` or `None`; callers must handle both.
+**Key distinction:** `TypedDict` is a *type hint only* — no runtime enforcement, no methods. Use it when you need dict semantics with type safety.
 
-### Protocols: typed duck typing
+---
+
+## 🔴 4. `dataclass` — Data Classes
+
+**What:** A decorator that auto-generates `__init__`, `__repr__`, `__eq__`, and more. Designed for "data containers" — classes whose primary purpose is storing data.
+
+**Why it matters for interviews:** One of the most-used decorators in real Python. Interviewers expect you to know `@dataclass` vs `NamedTuple` vs `TypedDict` vs regular class.
+
+**Gen AI angle:** Model configurations, hyperparameter containers, dataset records, embedding metadata.
 
 ```python
-from typing import Protocol
+from dataclasses import dataclass, field
+from typing import ClassVar
 
+@dataclass
+class ModelConfig:
+    """Configuration for an LLM call."""
+    model_name: str
+    temperature: float = 0.7
+    max_tokens: int = 512
+    top_p: float = 0.95
 
-class SupportsSend(Protocol):
-    def send(self, message: str) -> None:
-        ...
+    # Class-level constant — not an instance field
+    SUPPORTED_MODELS: ClassVar[list[str]] = ["gpt-4o", "claude-3.5", "llama-3"]
 
+    # Mutable default — use field(default_factory=...)
+    stop_sequences: list[str] = field(default_factory=list)
 
-def notify(channel: SupportsSend, message: str) -> None:
-    channel.send(message)
+    def __post_init__(self):
+        if self.temperature < 0 or self.temperature > 2:
+            raise ValueError("temperature must be in [0, 2]")
+
+config = ModelConfig(model_name="gpt-4o", temperature=0.5)
+print(config)  # ModelConfig(model_name='gpt-4o', temperature=0.5, ...)
 ```
 
-Any object with a compatible `send` method can satisfy the protocol without inheriting from it. This is useful for dependency boundaries and test doubles.
+**When to choose over TypedDict:**
+- You need methods or logic attached to the data
+- You want immutability (`@dataclass(frozen=True)`)
+- You need `__post_init__` validation
+- You want `__eq__` by value, not identity
 
-### Generics: know the purpose, not every edge case
+**Frozen dataclass (interview favorite):**
+```python
+@dataclass(frozen=True)
+class Point:
+    x: float
+    y: float
+
+p = Point(1.0, 2.0)
+# p.x = 3.0  # ← FrozenInstanceError — immutable, hashable!
+hash(p)  # works because frozen=True adds __hash__
+```
+
+---
+
+## 🔴 5. `Protocol` — Structural Subtyping (Duck Typing Done Right)
+
+**What:** A way to define *interfaces by behavior* rather than by inheritance. A class satisfies a `Protocol` if it has the required methods/attributes — regardless of whether it explicitly inherits from it.
+
+**Why it matters for interviews:** This is the "advanced typing" interview topic. Interviewers ask: "How is Protocol different from ABC? When would you use it?"
+
+**Gen AI angle:** Defining interfaces for LLM clients, embedding stores, vector databases — anything where you want to swap implementations.
 
 ```python
-from collections.abc import Sequence
-from typing import TypeVar
+from typing import Protocol, runtime_checkable
 
-T = TypeVar("T")
+# A protocol — any class with an embed() method satisfies this
+class EmbeddingEngine(Protocol):
+    def embed(self, text: str) -> list[float]: ...
+    def batch_embed(self, texts: list[str]) -> list[list[float]]: ...
 
+# These are COMPLETELY different classes — no common base!
+class OpenAIEmbedder:
+    def embed(self, text: str) -> list[float]:
+        return [0.1, 0.2, 0.3]  # actual API call
 
-def first(items: Sequence[T]) -> T:
-    if not items:
-        raise ValueError("items cannot be empty")
-    return items[0]
+    def batch_embed(self, texts: list[str]) -> list[list[float]]:
+        return [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+
+class FakeEmbedder:  # Used in tests — no inheritance!
+    def embed(self, text: str) -> list[float]:
+        return [0.0] * 1536
+
+    def batch_embed(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] * 1536 for _ in texts]
+
+def search(query: str, engine: EmbeddingEngine, docs: list[str]) -> str:
+    """Works with ANY EmbeddingEngine — OpenAI, Fake, local, etc."""
+    q_vec = engine.embed(query)
+    # ... similarity search ...
+    return "result"
+
+# Polymorphism without inheritance
+engine: EmbeddingEngine = FakeEmbedder()  # ← Static checker is happy
+search("hello", engine, ["doc1", "doc2"])
 ```
 
-The type variable connects the input element type to the return type.
+**`@runtime_checkable` variant:** Makes `isinstance(obj, MyProtocol)` work at runtime (checks only *methods/attributes*, not inheritance).
 
-### Likely interview questions
+```python
+@runtime_checkable
+class Speakable(Protocol):
+    def speak(self) -> str: ...
 
-- Are Python type hints enforced at runtime?
-- `Any` versus `object`?
-- `list[str]` versus `Sequence[str]` as a parameter?
-- What does `T | None` mean?
-- What problem does `Protocol` solve?
-- When is a generic function useful?
+class Dog:
+    def speak(self) -> str:
+        return "Woof"
+
+isinstance(Dog(), Speakable)  # True — structural check!
+```
+
+`@runtime_checkable`only Checks Method & Attribute Existence (Not Signatures or Return Types)
+
+---
+
+## 🔴 6. Duck Typing vs Protocol
+
+**Duck typing (dynamic):** "If it walks like a duck and quacks like a duck, it's a duck." No type hints, no errors until runtime.
+
+**Protocol (static):** Same philosophy, but with static type checking. Catches mismatches at *development time*.
+
+```python
+# --- Duck typing (no types, runtime errors only) ---
+def process(obj):
+    return obj.serialize()  # AttributeError if obj has no serialize()
+
+process(42)  # ← Fails at runtime: 'int' has no attribute 'serialize'
+
+# --- Protocol (static checking, same flexibility) ---
+class Serializable(Protocol):
+    def serialize(self) -> bytes: ...
+
+def process(obj: Serializable) -> bytes:
+    return obj.serialize()
+
+process(42)  # ← Type checker catches this BEFORE runtime!
+```
+
+**Interview answer:** "Duck typing gives us flexibility at runtime; Protocol gives us the same flexibility with compile-time safety. Use Protocol when you're building public APIs or large codebases where catching errors early matters."
+
+**Practical Gen AI example:**
+```python
+# Tool-calling protocol — any LLM provider that supports tool calling
+class ToolCallable(Protocol):
+    def invoke_tool(self, name: str, args: dict) -> str: ...
+
+# OpenAI client, Anthropic client, local mock — all work
+def execute_agent(llm: ToolCallable, task: str) -> str:
+    result = llm.invoke_tool("search", {"query": task})
+    return f"Agent result: {result}"
+```
+
+Python’s built-in syntax relies heavily on duck typing through Dunder (Magic) Methods:
+
+ - Iteration `(for x in obj)`: Python doesn't require obj to be a list or set. It only checks if obj implements the `__iter__()` or `__getitem__()` method.
+
+ - Length `(len(obj))`: Python checks if obj implements `__len__()`.
+
+ - Context Manager (with obj): Python checks if obj implements `__enter__()` and `__exit__()`.
+
+Note:
+ - Duck Typing = Default Python runtime behavior. Zero imports required.
+
+ - `typing.Protocol` = Opt-in extra tool. Used only when you want static type checkers (mypy, IDEs) to catch structural bugs before running the code.
+
+---
+
+## 🔴 7. ABC (Abstract Base Classes) — Formal Interfaces
+
+**What:** The `abc` module lets you define *enforced* interfaces. Subclasses **must** implement abstract methods or they cannot be instantiated.
+
+**Why it matters for interviews:** Often contrasted with Protocol. Key distinction: ABC enforces at *instantiation time* (runtime); Protocol enforces at *type-check time* (static).
+
+**Gen AI angle:** Plugin architectures, model providers, data loaders — where you want hard enforcement that implementations exist.
+
+```python
+from abc import ABC, abstractmethod
+from typing import list
+
+class BaseLLMProvider(ABC):
+    """Every LLM provider MUST implement these."""
+
+    @abstractmethod
+    def generate(self, prompt: str, max_tokens: int = 512) -> str:
+        """Generate a completion."""
+        pass
+
+    @abstractmethod
+    def get_model_name(self) -> str:
+        pass
+
+    # Concrete method — subclasses inherit for free
+    def health_check(self) -> bool:
+        try:
+            self.generate("ping", max_tokens=1)
+            return True
+        except Exception:
+            return False
+
+# --- Concrete implementation ---
+class OpenAIProvider(BaseLLMProvider):
+    def generate(self, prompt: str, max_tokens: int = 512) -> str:
+        return f"[OpenAI] {prompt[:20]}..."  # actual API call
+
+    def get_model_name(self) -> str:
+        return "gpt-4o"
+
+# --- THIS WOULD FAIL at instantiation ---
+class BrokenLLM(BaseLLMProvider):
+    pass  # Forgot to implement generate() and get_model_name()
+
+# BrokenLLM()  # ← TypeError: Can't instantiate abstract class BrokenLLM
+
+provider: BaseLLMProvider = OpenAIProvider()
+print(provider.health_check())  # True (inherited concrete method)
+```
+
+**Protocol vs ABC — the interview question:**
+
+| Feature | Protocol | ABC |
+|---|---|---|
+| Enforcement | Static (type checker) | Runtime (instantiation) |
+| Inheritance | Implicit (structural) | Explicit (`class Foo(Base)`) |
+| Methods | Only signatures | Can have concrete implementations |
+| Multiple inheritance | Yes (any number of protocols) | Limited |
+| Use case | Duck typing with safety | Plugin/framework APIs |
+
+---
+
+## 🔴 8. Dependency Injection (DI)
+
+**What:** Instead of a class creating its own dependencies (e.g., an LLM client), you *inject* them from outside — typically via the constructor.
+
+**Why it matters for interviews:** One of the top 3 design patterns asked about. Enables testing, swapping implementations, and clean separation of concerns.
+
+**Gen AI angle:** Swap between OpenAI / Anthropic / local models without changing your application logic. Mock the LLM in tests.
+
+```python
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+# --- The dependency interface ---
+class LLMClient(ABC):
+    @abstractmethod
+    def complete(self, prompt: str) -> str:
+        pass
+
+# --- Real implementation ---
+class OpenAIClient(LLMClient):
+    def complete(self, prompt: str) -> str:
+        return "[OpenAI API] response to: " + prompt
+
+class AnthropicClient(LLMClient):
+    def complete(self, prompt: str) -> str:
+        return "[Anthropic API] response to: " + prompt
+
+# --- Fake for testing ---
+class FakeLLMClient(LLMClient):
+    def complete(self, prompt: str) -> str:
+        return "fake response"
+
+# --- The application class that DEPENDS on the interface ---
+@dataclass
+class ChatBot:
+    client: LLMClient  # ← Injected dependency, not created here
+    system_prompt: str = "You are a helpful assistant."
+
+    def ask(self, question: str) -> str:
+        prompt = f"{self.system_prompt}\n\nQuestion: {question}"
+        return self.client.complete(prompt)
+
+# --- Dependency injection in practice ---
+# Production: use real client
+bot = ChatBot(client=OpenAIClient())
+print(bot.ask("What is Python?"))
+
+# Testing: inject fake — no network call needed!
+test_bot = ChatBot(client=FakeLLMClient())
+assert test_bot.ask("test") == "fake response"
+```
+
+**Interview tip:** DI is the #1 reason to use Protocol or ABC. It's the glue between the interface layer and the implementation layer.
+
+---
+
+## 🔴 9. Composition over Inheritance
+
+**What:** Build complex objects by *composing* simpler ones (has-a relationship) rather than *inheriting* from them (is-a relationship). Favored in modern Python design.
+
+**Why it matters for interviews:** "When would you use composition vs inheritance?" is a classic OOP question. Composition is more flexible, avoids fragile base class problems, and aligns with SOLID principles.
+
+**Gen AI angle:** Agents are composed of tools, memory, and planners — not inherited from a single base class.
+
+```python
+from dataclasses import dataclass
+from typing import list
+
+# --- Small, focused components ---
+@dataclass
+class Memory:
+    history: list[str] = field(default_factory=list)
+
+    def add(self, msg: str) -> None:
+        self.history.append(msg)
+
+    def get_context(self, last_n: int = 5) -> str:
+        return "\n".join(self.history[-last_n:])
+
+@dataclass
+class ToolBox:
+    tools: list[str] = field(default_factory=list)
+
+    def register(self, tool_name: str) -> None:
+        self.tools.append(tool_name)
+
+    def has_tool(self, name: str) -> bool:
+        return name in self.tools
+
+@dataclass
+class Retriever:
+    index_name: str = "default"
+
+    def search(self, query: str) -> list[str]:
+        return [f"doc about {query}"]
+
+# --- Agent COMPOSES these, rather than inheriting ---
+@dataclass
+class Agent:
+    memory: Memory        # has-a: Agent HAS Memory
+    tools: ToolBox        # has-a: Agent HAS ToolBox
+    retriever: Retriever  # has-a: Agent HAS Retriever
+    model_name: str = "gpt-4o"
+
+    def run(self, query: str) -> str:
+        context = self.memory.get_context()
+        docs = self.retriever.search(query)
+        if self.tools.has_tool("web_search"):
+            docs.append("web result")
+        return f"Answering: {query}\nContext: {context}\nDocs: {docs}"
+
+# --- Flexible assembly ---
+agent = Agent(
+    memory=Memory(),
+    tools=ToolBox(),
+    retriever=Retriever(index_name="faiss"),
+)
+agent.tools.register("web_search")
+print(agent.run("What is DI?"))
+```
+
+**Key takeaway:** Inheritance creates tight coupling. Composition creates flexible, testable systems — essential when you're building AI agents from pluggable components.
+
+---
+
+## 🔴 10. Pydantic — Runtime Validation
+
+**What:** A library that enforces type hints at *runtime* and provides smart parsing/serialization. The de facto standard for data validation in FastAPI and Gen AI apps.
+
+**Why it matters for interviews:** "How do you validate user input in a Python API?" Pydantic is the answer. Also essential for LLM output parsing.
+
+**Gen AI angle:** Pydantic is the backbone of LangChain, LlamaIndex, and any LLM output parsing pipeline.
+
+```python
+from pydantic import BaseModel, Field, field_validator, ConfigDict
+from typing import list
+
+class Document(BaseModel):
+    """A retrieved document with metadata."""
+    text: str
+    source: str
+    score: float = Field(ge=0.0, le=1.0)  # ge=greater-equal, le=less-equal
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("text")
+    @classmethod
+    def text_must_not_be_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("text must not be empty")
+        return v
+
+    model_config = ConfigDict(extra="forbid")  # Reject unknown fields
+
+# --- Pydantic does runtime validation ---
+doc = Document(text="Python is great", source="wiki", score=0.95)
+print(doc)  # Auto-parsed, validated
+
+# doc = Document(text="", source="x", score=1.5)
+# → ValueError: text must not be empty; score must be <= 1.0
+
+# --- Auto JSON serialization ---
+json_str = doc.model_dump_json(indent=2)
+loaded = Document.model_validate_json(json_str)  # Round-trip
+```
+
+**Interview must-know patterns:**
+```python
+# 1. Nested models
+class Query(BaseModel):
+    question: str
+    documents: list[Document]
+
+# 2. Union types for polymorphic input
+from typing import Union
+class SearchInput(BaseModel):
+    query: str
+    filter: Union[str, list[str], None] = None
+
+# 3. ConfigDict for ORM-style integration
+class User(BaseModel):
+    model_config = ConfigDict(from_attributes=True)  # Accept ORM objects
+    name: str
+    email: str
+```
+
+---
+
+## 🔴 11. Structured LLM Output / Schemas
+
+**What:** Getting LLMs to return data in a predictable, typed format (JSON, Pydantic models) instead of free-text. The backbone of reliable Gen AI systems.
+
+**Why it matters for interviews:** Every Gen AI role asks about structured output. "How do you make an LLM return a specific JSON shape?" is a top interview question.
+
+**Gen AI angle:** This is THE topic for Gen AI interviews. Tool calling, function calling, JSON mode — all are ways to get structured output.
+
+```python
+from pydantic import BaseModel, Field
+from typing import Optional
+import json
+
+# --- Define the expected schema ---
+class MovieReview(BaseModel):
+    title: str
+    rating: int = Field(ge=1, le=5)
+    sentiment: str = Field(pattern="^(positive|negative|neutral)$")
+    reasons: list[str] = Field(min_length=1)
+
+class ReviewBatch(BaseModel):
+    reviews: list[MovieReview]
+    overall_sentiment: str
+
+# --- Option 1: Prompt the LLM for JSON, then validate ---
+# (In production, use the LLM's native JSON mode or tool calling)
+raw_llm_response = '''
+{
+  "reviews": [
+    {"title": "Inception", "rating": 5, "sentiment": "positive", "reasons": ["mind-bending"]},
+    {"title": "Boring Movie", "rating": 2, "sentiment": "negative", "reasons": ["slow"]}
+  ],
+  "overall_sentiment": "mixed"
+}
+'''
+
+# Parse + validate in one line
+batch = ReviewBatch.model_validate_json(raw_llm_response)
+print(batch.reviews[0].rating)  # 5
+# batch = ReviewBatch.model_validate_json("not json")  # ← Validation error!
+
+# --- Option 2: Pydantic + openai SDK (structured output) ---
+from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageParam
+
+client = OpenAI()
+
+response = client.beta.chat.completions.parse(
+    model="gpt-4o-2024-08-06",
+    messages=[{"role": "user", "content": "Analyze these reviews"}],
+    response_format=ReviewBatch,  # ← Pydantic model as schema!
+)
+parsed: ReviewBatch = response.data  # Guaranteed to match the schema
+```
+
+**Why this matters:** Without structured output, you're parsing fragile regexes off free text. With Pydantic + LLM JSON mode, you get compile-time type safety on LLM responses.
+
+**Tool calling = structured output:**
+```python
+# Tool definitions ARE Pydantic-like schemas
+class SearchTool(BaseModel):
+    query: str
+    max_results: int = 5
+
+# The LLM calls this tool → arguments are validated automatically
+# Equivalent to: response includes {name: "search", arguments: {"query": "...", "max_results": 5}}
+```
+
+---
+
+## 🟡 12. `Callable` — Typing Functions
+
+**What:** A way to type hint that a parameter expects a *callable* (function, lambda, method) with a specific signature.
+
+**Why it matters for interviews:** Often used in callbacks, higher-order functions, and LLM tool definitions. Interviewers ask about `Callable[[int, str], bool]` syntax.
+
+**Gen AI angle:** Callbacks for LLM callbacks (LangChain), tool functions, scoring functions.
+
+```python
+from typing import Callable
+
+# Callable[[ArgTypes...], ReturnType]
+# Callable[[int, str], bool] means: takes (int, str), returns bool
+
+def process_data(
+    data: list[int],
+    transform: Callable[[int], float],
+    filter_fn: Callable[[float], bool] = lambda x: x > 0,
+) -> list[float]:
+    results = [transform(x) for x in data]
+    return [r for r in results if filter_fn(r)]
+
+# Usage — any function matching the signature works
+def square_to_float(x: int) -> float:
+    return float(x ** 2)
+
+def positive_only(x: float) -> bool:
+    return x > 0
+
+print(process_data([1, -2, 3], transform=square_to_float, filter_fn=positive_only))
+# [1.0, 9.0]
+
+# --- Gen AI: LLM scoring callback ---
+def evaluate_response(
+    response: str,
+    judge: Callable[[str], float],  # Returns a 0–1 score
+) -> float:
+    return judge(response)
+
+# Different judges, same interface
+def llama_judge(text: str) -> float:
+    return 0.85
+
+def gpt_judge(text: str) -> float:
+    return 0.92
+
+score = evaluate_response("Great answer!", judge=gpt_judge)
+```
+
+**`ParamSpec` is the advanced cousin** (see topic 15) — it preserves the parameter types of the wrapped callable.
+
+---
+
+## 🟡 13. Generics / `TypeVar` — Reusable Type-Safe Components
+
+**What:** `TypeVar` creates a *placeholder type* that gets filled in by the caller. Generics let you write functions/classes that work with *any* type while preserving type information.
+
+**Why it matters for interviews:** The #1 advanced typing topic. "What is a TypeVar?" "What's the difference between `List[T]` and `list`?" "Why use Generic over Any?"
+
+**Gen AI angle:** Generic repositories, vector stores, prompt templates — components that work across many types.
+
+```python
+from typing import TypeVar, Generic, list
+
+T = TypeVar("T")  # A placeholder type
+
+# Generic function — works for ANY type
+def first(items: list[T]) -> T | None:
+    return items[0] if items else None
+
+# Type is PRESERVED at call site:
+names: list[str] = ["Alice", "Bob"]
+age = first([25, 30, 35])
+print(first(names))  # → str | None, type checker knows it's str
+print(age)           # → int | None
+
+# --- Generic class ---
+class VectorStore(Generic[T]):
+    """A generic store that works for any embedding type."""
+
+    def __init__(self, dimension: int) -> None:
+        self.dimension = dimension
+        self._items: list[T] = []
+
+    def add(self, item: T) -> None:
+        self._items.append(item)
+
+    def search(self, query: T, top_k: int = 5) -> list[T]:
+        return self._items[:top_k]  # Simplified
+
+# Create type-specific stores
+string_store: VectorStore[str] = VectorStore(dimension=128)
+string_store.add("hello")
+
+# Embedding store — a list[float] is an embedding
+from typing import TypeAlias
+Embedding: TypeAlias = list[float]
+vec_store: VectorStore[Embedding] = VectorStore(dimension=1536)
+vec_store.add([0.1, 0.2, 0.3])
+```
+
+**`TypeVar` with bounds (interview favorite):**
+```python
+from typing import TypeVar, SupportsAbs
+
+# T must be a subtype of SupportsAbs (has __abs__)
+T = TypeVar("T", bound=SupportsAbs)
+
+def abs_sum(items: list[T]) -> float:
+    return sum(abs(item) for item in items)
+
+abs_sum([1, -2, 3])      # OK — ints support abs()
+abs_sum([1.5, -2.5, 3.5]) # OK — floats support abs()
+# abs_sum(["a", "b"])   # ← Type error! str doesn't support abs()
+```
+
+---
+
+## 🟡 14. `Literal` — Constrained Values
+
+**What:** Restricts a variable to one of a specific set of literal values. Tells the type checker "this can ONLY be one of these values."
+
+**Why it matters for interviews:** "What's the difference between `Literal` and `Enum`?" "When would you use Literal?" Common interview question about constrained types.
+
+**Gen AI angle:** Model names, output formats, sampling strategies, API statuses — anything with a fixed set of valid values.
+
+```python
+from typing import Literal
+from typing import Union
+
+# Restrict to specific string values
+ModelName = Literal["gpt-4o", "claude-3.5", "llama-3"]
+
+def configure(model: ModelName, temperature: float = 0.7) -> None:
+    print(f"Configuring {model} at temp={temperature}")
+
+configure("gpt-4o")       # OK
+configure("claude-3.5")   # OK
+configure("gpt-3.5")      # ← Type error! Not in the Literal set
+configure("unknown")      # ← Type error!
+
+# Combine with Union for complex constraints
+class Task(BaseModel):
+    type: Literal["classification", "generation", "summarization"]
+    model: ModelName
+    config: dict[str, float]
+
+# --- vs Enum ---
+# Literal is lighter-weight; Enum is a full class
+from enum import Enum
+
+class OutputFormat(str, Enum):
+    JSON = "json"
+    TEXT = "text"
+    MARKDOWN = "markdown"
+
+# Prefer Literal when: you want str compatibility, minimal overhead
+# Prefer Enum when: you need methods, iteration, or richer behavior
+
+# --- Practical Gen AI usage ---
+def stream_response(
+    model: ModelName,
+    stream_mode: Literal["text", "json", "tool"],
+) -> str:
+    """Stream mode determines how the LLM returns."""
+    ...
+
+stream_response("gpt-4o", "json")   # OK
+stream_response("gpt-4o", "audio")  # ← Type error!
+```
+
+**Interview answer for Literal vs Enum:**
+- `Literal` is a type hint — no runtime overhead, works with strings directly
+- `Enum` is a full class — has methods, iteration, but requires `.value` access
+- Use `Literal` for simple constrained strings; use `Enum` when you need richer behavior
+
+---
+
+## 🟡 15. `ParamSpec` — Preserving Callable Signatures
+
+**What:** A `TypeVar` for *parameters*. It captures the full signature of a callable so that decorators can preserve type information.
+
+**Why it matters for interviews:** "How do you type a decorator that preserves the wrapped function's signature?" This is the advanced answer. Without ParamSpec, decorators lose type info.
+
+**Gen AI angle:** Wrapping LLM clients with logging, retries, caching — all need to preserve the original function signature.
+
+```python
+from typing import ParamSpec, Callable, TypeVar
+from functools import wraps
+import time
+
+P = ParamSpec("P")  # Captures the *parameters* of a function
+R = TypeVar("R")    # Captures the *return type*
+
+# Without ParamSpec, a decorator loses signature info:
+def timer(prefix: str) -> None:
+    """Poor man's decorator — NO ParamSpec, loses types!"""
+    def decorator(func: Callable[..., R]) -> Callable[..., R]:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> R:
+            start = time.time()
+            result = func(*args, **kwargs)
+            print(f"{prefix}: {func.__name__} took {time.time()-start:.3f}s")
+            return result
+        return wrapper
+    return decorator
+
+# --- WITH ParamSpec — FULL type preservation ---
+def logged_call(prefix: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Type-safe decorator preserving P (params) and R (return type)."""
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
+        @wraps(func)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            start = time.time()
+            result = func(*args, **kwargs)
+            print(f"[{prefix}] {func.__name__} executed in {time.time()-start:.4f}s")
+            return result
+        return wrapper
+    return decorator
+
+# --- Now the decorated function keeps its signature! ---
+@logged_call("[LLM]")
+def generate_response(model: str, prompt: str, max_tokens: int = 100) -> str:
+    return f"Generated by {model}: {prompt[:30]}..."
+
+# Type checker KNOWS the signature after decoration:
+result: str = generate_response("gpt-4o", "Hello", max_tokens=50)
+# generate_response(123, 456)  # ← Type error! model must be str
+
+# --- Real Gen AI usage: retry decorator ---
+@logged_call("[RETRY]")
+def llm_complete(client: OpenAIClient, prompt: str) -> str:
+    return client.complete(prompt)
+```
+
+**Why ParamSpec matters:**
+- Without it: `Callable[..., R]` — loses parameter names and types
+- With it: `Callable[P, R]` — preserves full signature
+- Combined with `Consecutive`, you can enforce parameter ordering
+
+**The pattern to remember in interviews:**
+```python
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def my_decorator(func: Callable[P, R]) -> Callable[P, R]:
+    ...  # Preserve both params and return type
+```
+
+---
+
+## Quick Reference: When to Use What
+
+| Topic | Use When... | Gen AI Example |
+|---|---|---|
+| `TypedDict` | JSON-like dicts with fixed keys | LLM response schemas |
+| `dataclass` | Pure data containers with defaults | Model configs, dataset records |
+| `Protocol` | Structural interfaces (duck typing) | Swap LLM providers |
+| `ABC` | Enforced runtime interfaces | Plugin architectures |
+| `DI` | Swappable dependencies | Mock LLM clients for tests |
+| `Composition` | Complex objects from simple parts | Agent = Memory + Tools + Retriever |
+| `Pydantic` | Runtime validation + parsing | Request validation, LLM output parsing |
+| `Structured LLM` | Predictable LLM responses | JSON mode, tool calling |
+| `Callable` | Typing functions as arguments | LLM scoring callbacks |
+| `Generics/TypeVar` | Reusable type-safe components | Generic vector stores |
+| `Literal` | Fixed set of string values | Model names, output formats |
+| `ParamSpec` | Type-preserving decorators | Retry/logging wrappers for LLM clients |
 
 ### Exercises
 
